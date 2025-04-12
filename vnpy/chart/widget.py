@@ -1,6 +1,8 @@
 from datetime import datetime
+import sys
 
 import pyqtgraph as pg      # type: ignore
+import matplotlib.pyplot as plt
 
 from vnpy.trader.ui import QtGui, QtWidgets, QtCore
 from vnpy.trader.object import BarData
@@ -17,38 +19,262 @@ from .item import ChartItem
 pg.setConfigOptions(antialias=True)
 
 
-class ChartWidget(pg.PlotWidget):
-    """"""
-    MIN_BAR_COUNT = 100
+class ChartWidget(QtWidgets.QWidget):
+    """
+    Chart widget for showing candle bar data.
+    """
 
-    def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
-        """"""
+    signal_new_bar = QtCore.Signal(ObjectDict)
+
+    def __init__(self, parent: QtWidgets.QWidget = None) -> None:
         super().__init__(parent)
 
-        self._manager: BarManager = BarManager()
+        self.init_ui()
 
-        self._plots: dict[str, pg.PlotItem] = {}
-        self._items: dict[str, ChartItem] = {}
-        self._item_plot_map: dict[ChartItem, pg.PlotItem] = {}
+        self.manager: ChartManager = ChartManager(self)
+        self.manager.get_chart("main").add_plot("candle", get_default_settings("candle"))
+        self.manager.get_chart("volume").add_plot("volume", get_default_settings("volume"))
 
-        self._first_plot: pg.PlotItem | None = None
-        self._cursor: ChartCursor | None = None
-
-        self._right_ix: int = 0                     # Index of most right data
-        self._bar_count: int = self.MIN_BAR_COUNT   # Total bar visible in chart
-
-        self._init_ui()
-
-    def _init_ui(self) -> None:
+    def init_ui(self) -> None:
         """"""
-        self.setWindowTitle("ChartWidget of VeighNa")
+        self.setWindowTitle(_("K线图表"))
 
-        self._layout: pg.GraphicsLayout = pg.GraphicsLayout()
-        self._layout.setContentsMargins(10, 10, 10, 10)
-        self._layout.setSpacing(0)
-        self._layout.setBorder(color=GREY_COLOR, width=0.8)
-        self._layout.setZValue(0)
-        self.setCentralItem(self._layout)
+        canvas = FigureCanvas(Figure())
+
+        # 增加高DPI支持
+        canvas.figure.set_dpi(100)
+
+        # 使用亚克力效果背景 (仅在支持的平台)
+        if sys.platform == "win32":
+            try:
+                from win32mica import ApplyMica, MICAMODE
+                ApplyMica(int(self.winId()), MICAMODE.DARK)
+            except:
+                pass
+
+        # 改进图表的整体外观
+        canvas.figure.subplots_adjust(
+            left=0.08,
+            right=0.92,
+            top=0.95,
+            bottom=0.15,
+            hspace=0.05
+        )
+
+        # 使用更现代的配色方案
+        plt.style.use("dark_background")
+        canvas.figure.patch.set_facecolor("#1e1e2e")  # 设置整体背景色
+
+        # 改进图表控件区域
+        chart_toolbar = NavigationToolbar(canvas, canvas)
+        chart_toolbar.setStyleSheet("""
+            QToolBar {
+                background-color: rgba(30, 30, 46, 180);
+                border-top: 1px solid #313244;
+                spacing: 5px;
+            }
+
+            QToolBar QToolButton {
+                background-color: transparent;
+                border: none;
+                border-radius: 2px;
+                padding: 5px;
+            }
+
+            QToolBar QToolButton:hover {
+                background-color: rgba(80, 80, 100, 100);
+            }
+        """)
+
+        self.canvas: FigureCanvas = canvas
+        self.toolbar: NavigationToolbar = chart_toolbar
+
+        # 添加交互控件
+        self.symbol_line: QtWidgets.QLineEdit = QtWidgets.QLineEdit()
+        self.symbol_line.setPlaceholderText(_("输入合约代码"))
+        self.symbol_line.returnPressed.connect(self.on_symbol_changed)
+
+        self.exchange_combo: QtWidgets.QComboBox = QtWidgets.QComboBox()
+        self.exchange_combo.addItems([
+            Exchange.CFFEX.value,
+            Exchange.SHFE.value,
+            Exchange.DCE.value,
+            Exchange.CZCE.value,
+            Exchange.INE.value,
+            Exchange.SSE.value,
+            Exchange.SZSE.value,
+        ])
+
+        self.period_combo: QtWidgets.QComboBox = QtWidgets.QComboBox()
+        self.period_combo.addItems([
+            Interval.MINUTE.value,
+            Interval.HOUR.value,
+            Interval.DAILY.value,
+            Interval.WEEKLY.value,
+        ])
+
+        self.start_date_edit: QtWidgets.QDateEdit = QtWidgets.QDateEdit()
+        self.start_date_edit.setDisplayFormat("yyyy-MM-dd")
+        self.start_date_edit.setCalendarPopup(True)
+        self.start_date_edit.setDate(
+            QtCore.QDate.currentDate().addMonths(-1)
+        )
+
+        self.end_date_edit: QtWidgets.QDateEdit = QtWidgets.QDateEdit()
+        self.end_date_edit.setDisplayFormat("yyyy-MM-dd")
+        self.end_date_edit.setCalendarPopup(True)
+        self.end_date_edit.setDate(QtCore.QDate.currentDate())
+
+        self.load_button: QtWidgets.QPushButton = QtWidgets.QPushButton(_("加载"))
+        self.load_button.setFixedWidth(100)
+        self.load_button.clicked.connect(self.on_load)
+
+        self.refresh_button: QtWidgets.QPushButton = QtWidgets.QPushButton(_("刷新"))
+        self.refresh_button.setFixedWidth(100)
+        self.refresh_button.clicked.connect(self.on_refresh)
+
+        # 美化控件样式
+        self.symbol_line.setStyleSheet("""
+            QLineEdit {
+                padding: 5px;
+                border-radius: 3px;
+                border: 1px solid #313244;
+                background-color: #1e1e2e;
+            }
+            QLineEdit:focus {
+                border: 1px solid #585b70;
+            }
+        """)
+
+        combox_style = """
+            QComboBox {
+                padding: 5px;
+                border-radius: 3px;
+                border: 1px solid #313244;
+                background-color: #1e1e2e;
+            }
+            QComboBox::drop-down {
+                width: 20px;
+                border: none;
+            }
+            QComboBox::down-arrow {
+                width: 8px;
+                height: 8px;
+                background: #585b70;
+            }
+            QComboBox QAbstractItemView {
+                background-color: #1e1e2e;
+                border: 1px solid #313244;
+                selection-background-color: #585b70;
+            }
+        """
+
+        self.exchange_combo.setStyleSheet(combox_style)
+        self.period_combo.setStyleSheet(combox_style)
+
+        date_style = """
+            QDateEdit {
+                padding: 5px;
+                border-radius: 3px;
+                border: 1px solid #313244;
+                background-color: #1e1e2e;
+            }
+            QDateEdit::drop-down {
+                width: 20px;
+                border: none;
+            }
+            QDateEdit::down-arrow {
+                width: 8px;
+                height: 8px;
+                background: #585b70;
+            }
+            QCalendarWidget {
+                background-color: #1e1e2e;
+                color: #cdd6f4;
+            }
+            QCalendarWidget QToolButton {
+                color: #cdd6f4;
+                background-color: #313244;
+                border: 1px solid #585b70;
+            }
+            QCalendarWidget QMenu {
+                background-color: #1e1e2e;
+                color: #cdd6f4;
+            }
+            QCalendarWidget QSpinBox {
+                background-color: #1e1e2e;
+                color: #cdd6f4;
+                selection-background-color: #313244;
+            }
+        """
+
+        self.start_date_edit.setStyleSheet(date_style)
+        self.end_date_edit.setStyleSheet(date_style)
+
+        button_style = """
+            QPushButton {
+                padding: 5px 10px;
+                border-radius: 3px;
+                background-color: #45475a;
+                color: #cdd6f4;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #585b70;
+            }
+            QPushButton:pressed {
+                background-color: #313244;
+            }
+        """
+
+        self.load_button.setStyleSheet(button_style)
+        self.refresh_button.setStyleSheet(button_style)
+
+        # 创建表单布局
+        form = QtWidgets.QFormLayout()
+        form.addRow(_("合约代码"), self.symbol_line)
+        form.addRow(_("交易所"), self.exchange_combo)
+        form.addRow(_("周期"), self.period_combo)
+        form.addRow(_("开始时间"), self.start_date_edit)
+        form.addRow(_("结束时间"), self.end_date_edit)
+
+        # 创建按钮布局
+        button_hbox = QtWidgets.QHBoxLayout()
+        button_hbox.addWidget(self.load_button)
+        button_hbox.addWidget(self.refresh_button)
+        button_hbox.addStretch()
+
+        # 创建参数栏布局
+        control_hbox = QtWidgets.QHBoxLayout()
+
+        # 左侧参数表单
+        form_widget = QtWidgets.QWidget()
+        form_widget.setLayout(form)
+        form_widget.setFixedWidth(240)
+        control_hbox.addWidget(form_widget)
+
+        # 右侧按钮区域
+        button_widget = QtWidgets.QWidget()
+        button_widget.setLayout(button_hbox)
+        control_hbox.addWidget(button_widget)
+
+        # 创建垂直主布局
+        vbox = QtWidgets.QVBoxLayout()
+
+        # 添加图表区域
+        vbox.addWidget(self.canvas)
+        vbox.addWidget(self.toolbar)
+
+        # 添加控制区域
+        control_widget = QtWidgets.QWidget()
+        control_widget.setLayout(control_hbox)
+        control_widget.setStyleSheet("""
+            background-color: #181825;
+            border-top: 1px solid #313244;
+        """)
+        vbox.addWidget(control_widget)
+
+        self.setLayout(vbox)
 
     def _get_new_x_axis(self) -> DatetimeAxis:
         return DatetimeAxis(self._manager, orientation="bottom")
@@ -319,6 +545,41 @@ class ChartWidget(pg.PlotWidget):
 
         if self._cursor:
             self._cursor.update_info()
+
+    def refresh(self, data: List[ObjectDict]) -> None:
+        """
+        Update chart data.
+        """
+        self.updated = True
+        self.manager.set_data(data)
+
+        # 更新窗口标题显示更多信息
+        symbol = self.symbol_line.text()
+        exchange = self.exchange_combo.currentText()
+        interval = self.period_combo.currentText()
+        last_bar = data[-1] if data else None
+
+        title = f"{symbol} - {exchange} - {interval}"
+        if last_bar:
+            # 添加最新价格信息到标题
+            close_price = last_bar.get("close_price", "")
+            open_price = last_bar.get("open_price", "")
+
+            if close_price and open_price:
+                change = close_price - open_price
+                change_pct = change / open_price * 100 if open_price else 0
+
+                # 根据涨跌设置不同颜色
+                if change > 0:
+                    title += f" | 价格: <font color='#a6e3a1'>{close_price:.2f}</font>"
+                    title += f" | 涨跌: <font color='#a6e3a1'>+{change:.2f} (+{change_pct:.2f}%)</font>"
+                elif change < 0:
+                    title += f" | 价格: <font color='#f38ba8'>{close_price:.2f}</font>"
+                    title += f" | 涨跌: <font color='#f38ba8'>{change:.2f} ({change_pct:.2f}%)</font>"
+                else:
+                    title += f" | 价格: {close_price:.2f} | 涨跌: 0.00 (0.00%)"
+
+        self.setWindowTitle(title)
 
 
 class ChartCursor(QtCore.QObject):

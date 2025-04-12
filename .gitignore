@@ -40,3 +40,5 @@ _templates
 
 # Alpha
 lab/
+
+.venv

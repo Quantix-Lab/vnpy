@@ -5,7 +5,7 @@ Basic widgets for UI.
 import csv
 import platform
 from enum import Enum
-from typing import cast, Any
+from typing import cast, Any, Dict, List
 from copy import copy
 from tzlocal import get_localzone_name
 from datetime import datetime
@@ -53,35 +53,15 @@ class BaseCell(QtWidgets.QTableWidgetItem):
     def __init__(self, content: Any, data: Any) -> None:
         """"""
         super().__init__()
-
-        self._text: str = ""
-        self._data: Any = None
-
-        self.setTextAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
-
-        self.set_content(content, data)
-
-    def set_content(self, content: Any, data: Any) -> None:
-        """
-        Set text content.
-        """
-        self._text = str(content)
+        self.setTextAlignment(QtCore.Qt.AlignCenter)
+        self.setText(str(content))
         self._data = data
-
-        self.setText(self._text)
 
     def get_data(self) -> Any:
         """
-        Get data object.
+        Get original data.
         """
         return self._data
-
-    def __lt__(self, other: "BaseCell") -> bool:        # type: ignore
-        """
-        Sort by text content.
-        """
-        result: bool = self._text < other._text
-        return result
 
 
 class EnumCell(BaseCell):
@@ -238,16 +218,17 @@ class BaseMonitor(QtWidgets.QTableWidget):
 
     signal: QtCore.Signal = QtCore.Signal(Event)
 
-    def __init__(self, main_engine: MainEngine, event_engine: EventEngine) -> None:
+    def __init__(self, event_engine: EventEngine, parent: QtWidgets.QWidget = None) -> None:
         """"""
-        super().__init__()
+        super().__init__(parent)
 
-        self.main_engine: MainEngine = main_engine
         self.event_engine: EventEngine = event_engine
-        self.cells: dict[str, dict] = {}
+
+        self.cells: Dict[str, Dict[str, BaseCell]] = {}
+        self.rows: Dict[str, int] = {}
+        self.handlers: List[Any] = []
 
         self.init_ui()
-        self.load_setting()
         self.register_event()
 
     def init_ui(self) -> None:
@@ -256,32 +237,104 @@ class BaseMonitor(QtWidgets.QTableWidget):
         self.init_menu()
 
     def init_table(self) -> None:
-        """
-        Initialize table.
-        """
-        self.setColumnCount(len(self.headers))
+        """初始化表格，加入现代化外观"""
+        self.setEditTriggers(self.NoEditTriggers)
+        self.setAlternatingRowColors(True)  # 交替行颜色
+        self.verticalHeader().setVisible(False)
+        self.setSelectionBehavior(self.SelectRows)  # 选择整行
 
-        labels: list = [d["display"] for d in self.headers.values()]
+        # 设置水平表头样式
+        horizontal_header = self.horizontalHeader()
+        horizontal_header.setHighlightSections(False)
+        horizontal_header.setSectionResizeMode(QtWidgets.QHeaderView.Stretch)
+        horizontal_header.setDefaultAlignment(QtCore.Qt.AlignCenter)
+        horizontal_header.setStyleSheet("""
+            QHeaderView::section {
+                padding: 6px;
+                border: none;
+                border-bottom: 1px solid;
+            }
+        """)
+
+        # 设置垂直表头样式
+        vertical_header = self.verticalHeader()
+        vertical_header.setSectionResizeMode(QtWidgets.QHeaderView.Fixed)
+        vertical_header.setDefaultSectionSize(28)  # 更合适的行高
+
+        # 设置表格样式
+        self.setStyleSheet("""
+            QTableWidget {
+                gridline-color: rgba(80, 80, 80, 100);
+                outline: none;
+                selection-background-color: rgba(100, 140, 220, 80);
+            }
+            QTableWidget::item {
+                padding-left: 5px;
+                padding-right: 5px;
+            }
+        """)
+
+        # 设置表格列和头
+        labels = [d["display"] for d in self.headers.values()]
+        self.setColumnCount(len(labels))
         self.setHorizontalHeaderLabels(labels)
 
-        self.verticalHeader().setVisible(False)
-        self.setEditTriggers(self.EditTrigger.NoEditTriggers)
-        self.setAlternatingRowColors(True)
-        self.setSortingEnabled(self.sorting)
+        # 关联排序功能
+        if self.sorting:
+            self.horizontalHeader().setSortIndicatorShown(True)
+            self.horizontalHeader().sortIndicatorChanged.connect(self.sorting_change)
 
     def init_menu(self) -> None:
-        """
-        Create right click menu.
-        """
-        self.menu: QtWidgets.QMenu = QtWidgets.QMenu(self)
+        """初始化右键菜单"""
+        self.menu = QtWidgets.QMenu(self)
 
-        resize_action: QtGui.QAction = QtGui.QAction(_("调整列宽"), self)
+        resize_action = QtWidgets.QAction(_("调整列宽"), self)
         resize_action.triggered.connect(self.resize_columns)
         self.menu.addAction(resize_action)
 
-        save_action: QtGui.QAction = QtGui.QAction(_("保存数据"), self)
+        save_action = QtWidgets.QAction(_("保存数据"), self)
         save_action.triggered.connect(self.save_csv)
         self.menu.addAction(save_action)
+
+        # 添加复制选项
+        copy_action = QtWidgets.QAction(_("复制选中"), self)
+        copy_action.triggered.connect(self.copy_selection)
+        self.menu.addAction(copy_action)
+
+        # 添加刷新选项
+        refresh_action = QtWidgets.QAction(_("刷新"), self)
+        refresh_action.triggered.connect(self.refresh)
+        self.menu.addAction(refresh_action)
+
+        # 添加现代化图标
+        resize_action.setIcon(QtGui.QIcon(get_icon_path(__file__, "restore.ico")))
+        save_action.setIcon(QtGui.QIcon(get_icon_path(__file__, "database.ico")))
+        copy_action.setIcon(QtGui.QIcon(get_icon_path(__file__, "editor.ico")))
+        refresh_action.setIcon(QtGui.QIcon(get_icon_path(__file__, "connect.ico")))
+
+    def copy_selection(self) -> None:
+        """复制选中单元格到剪贴板"""
+        selected = self.selectedRanges()
+        if not selected:
+            return
+
+        text = ""
+        for r in range(selected[0].topRow(), selected[0].bottomRow() + 1):
+            row_data = []
+            for c in range(selected[0].leftColumn(), selected[0].rightColumn() + 1):
+                item = self.item(r, c)
+                if item:
+                    row_data.append(item.text())
+                else:
+                    row_data.append("")
+            text += "\t".join(row_data) + "\n"
+
+        QtWidgets.QApplication.clipboard().setText(text)
+
+    def refresh(self) -> None:
+        """刷新表格数据"""
+        # 这里需要根据具体Monitor类实现，基类只提供接口
+        pass
 
     def register_event(self) -> None:
         """
@@ -475,42 +528,141 @@ class OrderMonitor(BaseMonitor):
     Monitor for order data.
     """
 
-    event_type: str = EVENT_ORDER
-    data_key: str = "vt_orderid"
-    sorting: bool = True
+    event_type = EVENT_ORDER
+    data_key = "vt_orderid"
+    sorting = True
 
-    headers: dict = {
-        "orderid": {"display": _("委托号"), "cell": BaseCell, "update": False},
-        "reference": {"display": _("来源"), "cell": BaseCell, "update": False},
+    headers = {
+        "gateway_name": {"display": _("接口"), "cell": BaseCell, "update": False},
         "symbol": {"display": _("代码"), "cell": BaseCell, "update": False},
         "exchange": {"display": _("交易所"), "cell": EnumCell, "update": False},
         "type": {"display": _("类型"), "cell": EnumCell, "update": False},
         "direction": {"display": _("方向"), "cell": DirectionCell, "update": False},
         "offset": {"display": _("开平"), "cell": EnumCell, "update": False},
         "price": {"display": _("价格"), "cell": BaseCell, "update": False},
-        "volume": {"display": _("总数量"), "cell": BaseCell, "update": True},
+        "volume": {"display": _("总数量"), "cell": BaseCell, "update": False},
         "traded": {"display": _("已成交"), "cell": BaseCell, "update": True},
         "status": {"display": _("状态"), "cell": EnumCell, "update": True},
         "datetime": {"display": _("时间"), "cell": TimeCell, "update": True},
-        "gateway_name": {"display": _("接口"), "cell": BaseCell, "update": False},
+        "reference": {"display": _("来源"), "cell": BaseCell, "update": False},
     }
 
     def init_ui(self) -> None:
-        """
-        Connect signal.
-        """
+        """增强订单监控表格的UI"""
         super().init_ui()
 
-        self.setToolTip(_("双击单元格撤单"))
-        self.itemDoubleClicked.connect(self.cancel_order)
+        # 为状态单元格添加颜色高亮
+        self.setItemDelegate(OrderDelegate(self))
 
-    def cancel_order(self, cell: BaseCell) -> None:
-        """
-        Cancel order if cell double clicked.
-        """
-        order: OrderData = cell.get_data()
-        req: CancelRequest = order.create_cancel_request()
-        self.main_engine.cancel_order(req, order.gateway_name)
+        # 增加筛选功能
+        self.filter_combo = QtWidgets.QComboBox()
+        self.filter_combo.addItems([
+            _("全部"),
+            _("未成交"),
+            _("部分成交"),
+            _("已成交"),
+            _("已撤销"),
+            _("拒单")
+        ])
+        self.filter_combo.currentIndexChanged.connect(self.filter_orders)
+
+        # 增加搜索框
+        self.search_edit = QtWidgets.QLineEdit()
+        self.search_edit.setPlaceholderText(_("搜索代码"))
+        self.search_edit.textChanged.connect(self.filter_orders)
+
+        # 创建过滤器布局
+        filter_layout = QtWidgets.QHBoxLayout()
+        filter_layout.addWidget(QtWidgets.QLabel(_("状态:")))
+        filter_layout.addWidget(self.filter_combo)
+        filter_layout.addStretch()
+        filter_layout.addWidget(QtWidgets.QLabel(_("搜索:")))
+        filter_layout.addWidget(self.search_edit)
+
+        # 将过滤器添加到表格上方
+        if self.parent():
+            parent_layout = self.parent().layout()
+            if parent_layout:
+                # 查找表格在布局中的位置
+                for i in range(parent_layout.count()):
+                    if parent_layout.itemAt(i).widget() == self:
+                        # 在表格前插入过滤器
+                        filter_widget = QtWidgets.QWidget()
+                        filter_widget.setLayout(filter_layout)
+                        parent_layout.insertWidget(i, filter_widget)
+                        break
+
+    def filter_orders(self) -> None:
+        """根据筛选条件过滤订单"""
+        filter_status = self.filter_combo.currentText()
+        search_text = self.search_edit.text().lower()
+
+        for row in range(self.rowCount()):
+            show_row = True
+
+            # 根据状态筛选
+            if filter_status != _("全部"):
+                status_item = self.item(row, list(self.headers.keys()).index("status"))
+                if status_item and status_item.text() != filter_status:
+                    show_row = False
+
+            # 根据搜索文本筛选
+            if search_text and show_row:
+                symbol_item = self.item(row, list(self.headers.keys()).index("symbol"))
+                if symbol_item and search_text not in symbol_item.text().lower():
+                    show_row = False
+
+            # 显示或隐藏行
+            self.setRowHidden(row, not show_row)
+
+# 为订单状态添加颜色委托
+class OrderDelegate(QtWidgets.QStyledItemDelegate):
+    """为订单状态提供颜色显示"""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+
+    def paint(self, painter, option, index):
+        if index.column() == list(OrderMonitor.headers.keys()).index("status"):
+            status = index.data()
+
+            # 根据状态设置颜色
+            if status == _("已成交"):
+                color = QtGui.QColor(100, 180, 100)  # 绿色
+            elif status == _("已撤销"):
+                color = QtGui.QColor(200, 100, 100)  # 红色
+            elif status == _("拒单"):
+                color = QtGui.QColor(200, 80, 80)    # 深红色
+            elif status == _("未成交"):
+                color = QtGui.QColor(180, 180, 100)  # 黄色
+            elif status == _("部分成交"):
+                color = QtGui.QColor(100, 180, 180)  # 青色
+            else:
+                color = QtGui.QColor(180, 180, 180)  # 灰色
+
+            # 创建背景
+            painter.save()
+
+            # 绘制背景
+            bg_color = QtGui.QColor(color)
+            bg_color.setAlpha(60)  # 半透明
+            painter.fillRect(option.rect, bg_color)
+
+            # 绘制边框
+            border_color = QtGui.QColor(color)
+            border_color.setAlpha(100)
+            painter.setPen(border_color)
+            painter.drawRect(option.rect.adjusted(0, 0, -1, -1))
+
+            # 绘制文本
+            painter.setPen(QtGui.QColor(0, 0, 0))
+            text_option = QtGui.QTextOption()
+            text_option.setAlignment(QtCore.Qt.AlignCenter)
+            painter.drawText(option.rect, status, text_option)
+
+            painter.restore()
+        else:
+            super().paint(painter, option, index)
 
 
 class PositionMonitor(BaseMonitor):
@@ -598,7 +750,7 @@ class QuoteMonitor(BaseMonitor):
 
 class ConnectDialog(QtWidgets.QDialog):
     """
-    Start connection of a certain gateway.
+    Start connection of a specific gateway.
     """
 
     def __init__(self, main_engine: MainEngine, gateway_name: str) -> None:
@@ -609,62 +761,167 @@ class ConnectDialog(QtWidgets.QDialog):
         self.gateway_name: str = gateway_name
         self.filename: str = f"connect_{gateway_name.lower()}.json"
 
-        self.widgets: dict[str, tuple[QtWidgets.QWidget, type]] = {}
+        self.widgets: Dict[str, Any] = {}
 
         self.init_ui()
 
     def init_ui(self) -> None:
         """"""
-        self.setWindowTitle(_("连接{}").format(self.gateway_name))
+        self.setWindowTitle(f"{self.gateway_name} {_('连接')}")
 
-        # Default setting provides field name, field data type and field default value.
-        default_setting: dict | None = self.main_engine.get_default_setting(self.gateway_name)
+        # 为对话框添加图标
+        icon = QtGui.QIcon(get_icon_path(__file__, "connect.ico"))
+        self.setWindowIcon(icon)
 
-        # Saved setting provides field data used last time.
-        loaded_setting: dict = load_json(self.filename)
+        # 获取接口设置
+        widget: QtWidgets.QWidget = QtWidgets.QWidget()
+        gateway_class = self.main_engine.get_gateway(self.gateway_name).gateway_class
+        default_setting: Dict[str, Any] = gateway_class.default_setting
 
-        # Initialize line edits and form layout based on setting.
+        # 创建表单控件
         form: QtWidgets.QFormLayout = QtWidgets.QFormLayout()
 
-        if default_setting:
-            for field_name, field_value in default_setting.items():
-                field_type: type = type(field_value)
+        # 使表单字段显示更美观
+        form.setSpacing(10)
+        form.setContentsMargins(10, 10, 10, 10)
+        form.setFieldGrowthPolicy(form.FieldsStayAtSizeHint)
+        form.setLabelAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
 
-                if field_type is list:
-                    combo: QtWidgets.QComboBox = QtWidgets.QComboBox()
-                    combo.addItems(field_value)
+        # 加载历史连接记录
+        setting: Dict[str, Any] = load_json(self.filename)
 
-                    if field_name in loaded_setting:
-                        saved_value = loaded_setting[field_name]
-                        ix: int = combo.findText(saved_value)
-                        combo.setCurrentIndex(ix)
+        # 遍历设置创建widget
+        for field_name, field_value in default_setting.items():
+            field_type: str = type(field_value).__name__
 
-                    form.addRow(f"{field_name} <{field_type.__name__}>", combo)
-                    self.widgets[field_name] = (combo, field_type)
+            if field_type == "list":
+                if not field_value:
+                    continue
+
+                # 创建组合框控件
+                combo: QtWidgets.QComboBox = QtWidgets.QComboBox()
+                combo.addItems(field_value)
+
+                # 设置历史选择值
+                if setting:
+                    saved_value = setting.get(field_name, field_value[0])
+                    ix: int = field_value.index(saved_value) if saved_value in field_value else 0
+                    combo.setCurrentIndex(ix)
+
+                # 样式设置
+                combo.setFixedWidth(200)
+                combo.setStyleSheet("""
+                    QComboBox {
+                        padding: 5px;
+                        border-radius: 3px;
+                    }
+                """)
+
+                form.addRow(f"{field_name} <font color='gray'>{_('列表')}</font>", combo)
+                self.widgets[field_name] = (combo, "currentText")
+
+            elif field_type == "bool":
+                # 创建复选框控件
+                checkbox: QtWidgets.QCheckBox = QtWidgets.QCheckBox()
+
+                # 设置历史选择值
+                if setting:
+                    saved_value = setting.get(field_name, field_value)
+                    checkbox.setChecked(saved_value)
                 else:
-                    line: QtWidgets.QLineEdit = QtWidgets.QLineEdit(str(field_value))
+                    checkbox.setChecked(field_value)
 
-                    if field_name in loaded_setting:
-                        saved_value = loaded_setting[field_name]
-                        line.setText(str(saved_value))
+                form.addRow(f"{field_name} <font color='gray'>{_('开关')}</font>", checkbox)
+                self.widgets[field_name] = (checkbox, "isChecked")
 
-                    if _("密码") in field_name:
-                        line.setEchoMode(QtWidgets.QLineEdit.EchoMode.Password)
+            else:
+                # 创建文本输入框控件
+                line: QtWidgets.QLineEdit = QtWidgets.QLineEdit()
 
-                    if field_type is int:
-                        validator: QtGui.QIntValidator = QtGui.QIntValidator()
-                        line.setValidator(validator)
+                # 设置历史输入值
+                if setting:
+                    saved_value = setting.get(field_name, field_value)
+                    line.setText(str(saved_value))
+                else:
+                    line.setText(str(field_value))
 
-                    form.addRow(f"{field_name} <{field_type.__name__}>", line)
-                    self.widgets[field_name] = (line, field_type)
+                # 密码类型使用隐藏显示
+                if "密码" in field_name:
+                    line.setEchoMode(line.Password)
+                    line.setPlaceholderText(_("请输入密码"))
 
-        button: QtWidgets.QPushButton = QtWidgets.QPushButton(_("连接"))
-        button.clicked.connect(self.connect_gateway)
-        form.addRow(button)
+                # 样式设置
+                line.setFixedWidth(200)
+                line.setStyleSheet("""
+                    QLineEdit {
+                        padding: 5px;
+                        border-radius: 3px;
+                    }
+                """)
 
-        self.setLayout(form)
+                form.addRow(f"{field_name}", line)
+                self.widgets[field_name] = (line, "text")
 
-    def connect_gateway(self) -> None:
+                # API KEY提示
+                if "key" in field_name.lower():
+                    line.setPlaceholderText(_("请输入API密钥"))
+                    tip_label = QtWidgets.QLabel(_("(请妥善保管您的密钥)"))
+                    tip_label.setStyleSheet("color: gray;")
+                    form.addRow("", tip_label)
+
+        widget.setLayout(form)
+
+        # 底部按钮
+        cancel_button: QtWidgets.QPushButton = QtWidgets.QPushButton(_("取消"))
+        cancel_button.clicked.connect(self.close)
+        cancel_button.setFixedHeight(30)
+        cancel_button.setStyleSheet("""
+            QPushButton {
+                padding: 5px 15px;
+                border-radius: 3px;
+            }
+        """)
+
+        connect_button: QtWidgets.QPushButton = QtWidgets.QPushButton(_("连接"))
+        connect_button.clicked.connect(self.connect)
+        connect_button.setFixedHeight(30)
+        connect_button.setStyleSheet("""
+            QPushButton {
+                padding: 5px 15px;
+                border-radius: 3px;
+                background-color: #3d8bcd;
+                color: white;
+            }
+            QPushButton:hover {
+                background-color: #5f9ddb;
+            }
+        """)
+
+        # 添加图标
+        cancel_button.setIcon(QtGui.QIcon(get_icon_path(__file__, "exit.ico")))
+        connect_button.setIcon(QtGui.QIcon(get_icon_path(__file__, "connect.ico")))
+
+        # 创建底部按钮布局
+        button_box: QtWidgets.QHBoxLayout = QtWidgets.QHBoxLayout()
+        button_box.addStretch()
+        button_box.addWidget(cancel_button)
+        button_box.addWidget(connect_button)
+
+        # 创建最终布局
+        vbox: QtWidgets.QVBoxLayout = QtWidgets.QVBoxLayout()
+        vbox.addWidget(widget)
+        vbox.addLayout(button_box)
+
+        self.setLayout(vbox)
+
+        # 设置窗口样式
+        self.setMinimumWidth(400)
+        self.setWindowFlags(
+            QtCore.Qt.CustomizeWindowHint |
+            QtCore.Qt.WindowCloseButtonHint
+        )
+
+    def connect(self) -> None:
         """
         Get setting value from line edits and connect the gateway.
         """

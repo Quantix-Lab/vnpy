@@ -1,0 +1,41 @@
+vnpy>=4.0.0
+importlib_metadata>=8.6.0
+vnpy_sqlite>=1.0.0
+futu-api>=9.1.5108
+
+# 交易接口 (按需取消注释)
+vnpy_futu>=1.0.0
+# vnpy_ctp>=6.7.0
+# vnpy_ib>=2.3.0
+# vnpy_xtp>=2.6.0
+# vnpy_tora>=1.1.0
+# vnpy_mini>=1.2.0
+# vnpy_uft>=3.0.0
+# vnpy_tap>=1.0.0
+# vnpy_rohon>=1.0.0
+# vnpy_femas>=1.0.0
+# vnpy_da>=1.0.0
+# vnpy_sec>=1.0.0
+# vnpy_comstar>=1.0.0
+# vnpy_ost>=1.0.0
+# vnpy_hft>=1.0.0
+# vnpy_tts>=1.0.0
+# vnpy_esunny>=1.0.0
+
+# 应用模块 (按需取消注释)
+vnpy_ctastrategy>=1.3.0
+vnpy_ctabacktester>=1.1.6
+vnpy_datamanager>=1.1.1
+# vnpy_datarecorder>=1.1.0
+# vnpy_spreadtrading>=1.0.0
+# vnpy_algotrading>=1.0.0
+# vnpy_optionmaster>=1.1.0
+# vnpy_portfoliostrategy>=1.0.0
+# vnpy_scripttrader>=1.0.0
+# vnpy_chartwizard>=1.0.0
+# vnpy_rpcservice>=1.0.0
+# vnpy_excelrtd>=1.0.0
+# vnpy_riskmanager>=1.1.0
+# vnpy_webtrader>=1.0.0
+# vnpy_portfoliomanager>=1.0.0
+# vnpy_paperaccount>=1.0.0

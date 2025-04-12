@@ -6,8 +6,11 @@ from types import ModuleType
 import webbrowser
 from functools import partial
 from importlib import import_module
-from typing import TypeVar
+from typing import TypeVar, Dict
 from collections.abc import Callable
+import platform
+import sys
+from datetime import datetime
 
 import vnpy
 from vnpy.event import EventEngine
@@ -48,20 +51,230 @@ class MainWindow(QtWidgets.QMainWindow):
         self.main_engine: MainEngine = main_engine
         self.event_engine: EventEngine = event_engine
 
-        self.window_title: str = _("VeighNa Trader 社区版 - {}   [{}]").format(vnpy.__version__, TRADER_DIR)
+        self.connect_status: Dict[str, bool] = {}
 
-        self.widgets: dict[str, QtWidgets.QWidget] = {}
-        self.monitors: dict[str, BaseMonitor] = {}
+        self.window_title: str = _("VeighNa量化交易平台")
+
+        self.widgets: Dict[str, QtWidgets.QWidget] = {}
+        self.monitors: Dict[str, BaseMonitor] = {}
 
         self.init_ui()
+        self.init_shortcut()
+
+        # 定时器更新状态栏
+        self.statusTimer = QtCore.QTimer()
+        self.statusTimer.timeout.connect(self.update_status)
+        self.statusTimer.start(1000)  # 每秒更新一次
 
     def init_ui(self) -> None:
         """"""
         self.setWindowTitle(self.window_title)
-        self.init_dock()
+
+        # 设置图标
+        icon = QtGui.QIcon(get_icon_path(__file__, "vnpy.ico"))
+        self.setWindowIcon(icon)
+
+        # 设置应用样式
+        self.setStyleSheet("""
+            QStatusBar {
+                min-height: 25px;
+                background-color: #181825;
+                border-top: 1px solid #313244;
+            }
+
+            QToolBar {
+                background-color: #181825;
+                border-bottom: 1px solid #313244;
+                spacing: 5px;
+            }
+
+            QToolButton {
+                padding: 5px;
+                border: none;
+                border-radius: 2px;
+            }
+
+            QToolButton:hover {
+                background-color: #313244;
+            }
+
+            QDockWidget {
+                font-weight: bold;
+            }
+
+            QDockWidget::title {
+                background-color: #1e1e2e;
+                padding: 6px;
+                border: none;
+            }
+
+            QTabBar::tab {
+                min-width: 100px;
+                padding: 8px 12px;
+            }
+        """)
+
+        # 创建中央组件
+        self.init_central_widget()
+
+        # 创建工具栏
         self.init_toolbar()
+
+        # 创建菜单栏
         self.init_menu()
-        self.load_window_setting("custom")
+
+        # 创建停靠组件
+        self.init_dock()
+
+        # 设置状态栏
+        self.statusBar().showMessage(_("交易平台启动完成，欢迎使用！"))
+
+        # 添加状态图标
+        self.connectStatus = QtWidgets.QLabel()
+        self.connectStatus.setPixmap(
+            QtGui.QIcon(get_icon_path(__file__, "connect.ico")).pixmap(18, 18)
+        )
+        self.connectStatus.setDisabled(True)  # 灰色
+        self.statusBar().addPermanentWidget(self.connectStatus)
+
+        # 添加服务器时间
+        self.timeLabel = QtWidgets.QLabel()
+        self.statusBar().addPermanentWidget(self.timeLabel)
+
+        # 窗口设置
+        self.resize(1100, 700)
+        self.setMinimumWidth(1000)
+        self.setMinimumHeight(700)
+
+        # 设置启动方式
+        if sys.platform == "darwin":  # macOS
+            self.setUnifiedTitleAndToolBarOnMac(True)
+
+        # 设置位置为屏幕中央
+        screen = QtWidgets.QApplication.primaryScreen().geometry()
+        self.move(
+            int(screen.width() / 2 - self.width() / 2),
+            int(screen.height() / 2 - self.height() / 2)
+        )
+
+    def init_central_widget(self) -> None:
+        """创建中央组件，显示欢迎页面和系统信息"""
+        widget = QtWidgets.QWidget()
+        layout = QtWidgets.QVBoxLayout()
+
+        # 欢迎标题
+        title_label = QtWidgets.QLabel(_("VeighNa量化交易平台"))
+        title_label.setAlignment(QtCore.Qt.AlignCenter)
+        title_label.setStyleSheet("""
+            font-size: 24px;
+            font-weight: bold;
+            margin: 20px 0;
+            color: #89b4fa;
+        """)
+
+        # 添加logo
+        logo_label = QtWidgets.QLabel()
+        logo_pixmap = QtGui.QPixmap(get_icon_path(__file__, "vnpy.ico"))
+        if not logo_pixmap.isNull():
+            logo_scaled = logo_pixmap.scaled(
+                128, 128,
+                QtCore.Qt.KeepAspectRatio,
+                QtCore.Qt.SmoothTransformation
+            )
+            logo_label.setPixmap(logo_scaled)
+            logo_label.setAlignment(QtCore.Qt.AlignCenter)
+
+        # 添加系统信息面板
+        info_groupbox = QtWidgets.QGroupBox(_("系统信息"))
+        info_layout = QtWidgets.QFormLayout()
+
+        # 获取系统信息
+        cpuLabel = QtWidgets.QLabel(platform.processor())
+        osLabel = QtWidgets.QLabel(f"{platform.system()} {platform.release()}")
+        pythonLabel = QtWidgets.QLabel(platform.python_version())
+        qtLabel = QtWidgets.QLabel(f"PySide6 {QtCore.__version__}")
+
+        # 添加到布局
+        info_layout.addRow(_("处理器:"), cpuLabel)
+        info_layout.addRow(_("操作系统:"), osLabel)
+        info_layout.addRow(_("Python版本:"), pythonLabel)
+        info_layout.addRow(_("Qt版本:"), qtLabel)
+
+        # 添加VeighNa版本
+        try:
+            from vnpy import __version__ as vnpy_version
+            vnpyLabel = QtWidgets.QLabel(vnpy_version)
+            info_layout.addRow(_("VeighNa版本:"), vnpyLabel)
+        except:
+            pass
+
+        info_groupbox.setLayout(info_layout)
+
+        # 快速启动区
+        start_groupbox = QtWidgets.QGroupBox(_("快速启动"))
+        start_layout = QtWidgets.QHBoxLayout()
+
+        # 创建快速启动按钮
+        connect_button = self.create_action_button(
+            icon_name="connect.ico",
+            text=_("连接接口"),
+            function=self.open_connect_dialog
+        )
+
+        market_button = self.create_action_button(
+            icon_name="database.ico",
+            text=_("行情监控"),
+            function=self.open_widget_market
+        )
+
+        trade_button = self.create_action_button(
+            icon_name="contract.ico",
+            text=_("交易监控"),
+            function=self.open_widget_trading
+        )
+
+        # 添加按钮到布局
+        start_layout.addWidget(connect_button)
+        start_layout.addWidget(market_button)
+        start_layout.addWidget(trade_button)
+
+        start_groupbox.setLayout(start_layout)
+
+        # 组合所有元素
+        layout.addWidget(title_label)
+        layout.addWidget(logo_label)
+        layout.addWidget(info_groupbox)
+        layout.addWidget(start_groupbox)
+        layout.addStretch()
+
+        widget.setLayout(layout)
+        self.setCentralWidget(widget)
+
+    def create_action_button(self, icon_name: str, text: str, function) -> QtWidgets.QPushButton:
+        """创建快速操作按钮"""
+        button = QtWidgets.QPushButton(text)
+        button.setIcon(QtGui.QIcon(get_icon_path(__file__, icon_name)))
+        button.setIconSize(QtCore.QSize(32, 32))
+        button.clicked.connect(function)
+        button.setMinimumHeight(64)
+        button.setStyleSheet("""
+            QPushButton {
+                font-size: 14px;
+                padding: 8px 16px;
+                text-align: center;
+                border-radius: 4px;
+                border: 1px solid #313244;
+            }
+            QPushButton:hover {
+                background-color: #313244;
+            }
+        """)
+        return button
+
+    def init_shortcut(self) -> None:
+        """"""
+        # Add any necessary shortcut initialization
+        pass
 
     def init_dock(self) -> None:
         """"""
@@ -220,25 +433,50 @@ class MainWindow(QtWidgets.QMainWindow):
         if toolbar:
             self.toolbar.addAction(action)
 
-    def create_dock(
-        self,
-        widget_class: type[WidgetType],
-        name: str,
-        area: QtCore.Qt.DockWidgetArea
-    ) -> tuple[WidgetType, QtWidgets.QDockWidget]:
-        """
-        Initialize a dock widget.
-        """
-        widget: WidgetType = widget_class(self.main_engine, self.event_engine)      # type: ignore
-        if isinstance(widget, BaseMonitor):
-            self.monitors[name] = widget
+    def create_dock(self, widget_class: QtWidgets.QWidget, name: str, direction: QtCore.Qt.DockWidgetArea = None) -> QtWidgets.QDockWidget:
+        """创建停靠组件，增加现代感"""
+        widget = widget_class(self.main_engine, self.event_engine)
 
-        dock: QtWidgets.QDockWidget = QtWidgets.QDockWidget(name)
+        dock = QtWidgets.QDockWidget(name)
         dock.setWidget(widget)
         dock.setObjectName(name)
-        dock.setFeatures(dock.DockWidgetFeature.DockWidgetFloatable | dock.DockWidgetFeature.DockWidgetMovable)
-        self.addDockWidget(area, dock)
-        return widget, dock
+        dock.setFeatures(dock.DockWidgetFloatable | dock.DockWidgetMovable)
+
+        # 添加图标
+        if "市场" in name:
+            icon_name = "database.ico"
+        elif "持仓" in name:
+            icon_name = "test.ico"
+        elif "成交" in name:
+            icon_name = "contract.ico"
+        elif "委托" in name:
+            icon_name = "editor.ico"
+        elif "日志" in name:
+            icon_name = "forum.ico"
+        else:
+            icon_name = "about.ico"
+
+        # 设置标题栏样式
+        title_bar = dock.titleBarWidget()
+        if title_bar:
+            title_layout = QtWidgets.QHBoxLayout(title_bar)
+            title_layout.setContentsMargins(5, 0, 5, 0)
+
+            icon_label = QtWidgets.QLabel()
+            icon_label.setPixmap(QtGui.QIcon(get_icon_path(__file__, icon_name)).pixmap(16, 16))
+            title_layout.addWidget(icon_label)
+
+            name_label = QtWidgets.QLabel(name)
+            name_label.setStyleSheet("font-weight: bold;")
+            title_layout.addWidget(name_label)
+            title_layout.addStretch()
+
+        if direction:
+            self.addDockWidget(direction, dock)
+        else:
+            self.addDockWidget(QtCore.Qt.RightDockWidgetArea, dock)
+
+        return dock
 
     def connect_gateway(self, gateway_name: str) -> None:
         """
@@ -331,3 +569,22 @@ class MainWindow(QtWidgets.QMainWindow):
         """
         dialog: GlobalDialog = GlobalDialog()
         dialog.exec()
+
+    def update_status(self) -> None:
+        """更新状态栏信息"""
+        # 更新时间
+        time_now = datetime.now().strftime("%H:%M:%S")
+        self.timeLabel.setText(f"{_('系统时间')}: {time_now}")
+
+        # 更新连接状态
+        connected = False
+        for gateway_name in self.main_engine.get_all_gateway_names():
+            status = self.main_engine.get_gateway(gateway_name).status
+            if status:  # 任何一个接口连接，就显示为已连接
+                connected = True
+                break
+
+        if connected:
+            self.connectStatus.setDisabled(False)  # 正常显示
+        else:
+            self.connectStatus.setDisabled(True)   # 灰色显示

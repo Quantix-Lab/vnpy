@@ -5,6 +5,8 @@ import traceback
 import webbrowser
 import types
 import threading
+import os
+from pathlib import Path
 
 import qdarkstyle  # type: ignore
 from PySide6 import QtGui, QtWidgets, QtCore
@@ -20,19 +22,45 @@ Qt = QtCore.Qt
 
 def create_qapp(app_name: str = "VeighNa Trader") -> QtWidgets.QApplication:
     """
-    Create Qt Application.
+    Create Qt Application with modern UI and customization options.
     """
-    # Set up dark stylesheet
+    # Set up application
     qapp: QtWidgets.QApplication = QtWidgets.QApplication(sys.argv)
-    qapp.setStyleSheet(qdarkstyle.load_stylesheet(qt_api="pyside6"))
+
+    # Get theme setting
+    theme = SETTINGS.get("ui.theme", "dark")
+    use_custom_style = SETTINGS.get("ui.custom_style", True)
+
+    # Apply theme
+    if theme == "dark":
+        if use_custom_style:
+            # Apply modern dark theme with blue accents
+            apply_modern_dark_theme(qapp)
+        else:
+            # Use qdarkstyle as fallback
+            qapp.setStyleSheet(qdarkstyle.load_stylesheet(qt_api="pyside6"))
+    else:
+        # Light theme (system default with some enhancements)
+        apply_light_theme(qapp)
 
     # Set up font
-    font: QtGui.QFont = QtGui.QFont(SETTINGS["font.family"], SETTINGS["font.size"])
+    font_family = SETTINGS.get("font.family", "Segoe UI" if sys.platform == "win32" else "SF Pro Display" if sys.platform == "darwin" else "Noto Sans")
+    font_size = SETTINGS.get("font.size", 10)
+    font: QtGui.QFont = QtGui.QFont(font_family, font_size)
     qapp.setFont(font)
 
     # Set up icon
-    icon: QtGui.QIcon = QtGui.QIcon(get_icon_path(__file__, "vnpy.ico"))
+    icon_path = SETTINGS.get("ui.icon_path", get_icon_path(__file__, "vnpy.ico"))
+    icon: QtGui.QIcon = QtGui.QIcon(icon_path)
     qapp.setWindowIcon(icon)
+
+    # Set up effects
+    if SETTINGS.get("ui.animations", True):
+        enable_animations()
+
+    # Set up HiDPI support
+    if SETTINGS.get("ui.hidpi", True):
+        enable_hidpi_support()
 
     # Set up windows process ID
     if "Windows" in platform.uname():
@@ -71,6 +99,87 @@ def create_qapp(app_name: str = "VeighNa Trader") -> QtWidgets.QApplication:
     return qapp
 
 
+def apply_modern_dark_theme(app: QtWidgets.QApplication) -> None:
+    """Apply a modern dark theme with blue accents"""
+    palette = QtGui.QPalette()
+
+    # Base colors
+    dark_color = QtGui.QColor(30, 30, 46)      # Background
+    darker_color = QtGui.QColor(24, 24, 37)    # Alternate background
+    text_color = QtGui.QColor(205, 214, 244)   # Text
+    highlight_color = QtGui.QColor(137, 180, 250)  # Blue highlight
+    button_color = QtGui.QColor(69, 71, 90)    # Button
+
+    # Set up the palette
+    palette.setColor(QtGui.QPalette.Window, dark_color)
+    palette.setColor(QtGui.QPalette.WindowText, text_color)
+    palette.setColor(QtGui.QPalette.Base, darker_color)
+    palette.setColor(QtGui.QPalette.AlternateBase, dark_color)
+    palette.setColor(QtGui.QPalette.ToolTipBase, dark_color)
+    palette.setColor(QtGui.QPalette.ToolTipText, text_color)
+    palette.setColor(QtGui.QPalette.Text, text_color)
+    palette.setColor(QtGui.QPalette.Button, button_color)
+    palette.setColor(QtGui.QPalette.ButtonText, text_color)
+    palette.setColor(QtGui.QPalette.BrightText, QtCore.Qt.red)
+    palette.setColor(QtGui.QPalette.Link, highlight_color)
+    palette.setColor(QtGui.QPalette.Highlight, highlight_color)
+    palette.setColor(QtGui.QPalette.HighlightedText, darker_color)
+
+    app.setPalette(palette)
+
+    # Try to load custom stylesheet
+    style_file = Path(__file__).parent.parent.parent.parent / "examples" / "veighna_trader" / "custom_style.qss"
+    if style_file.exists():
+        with open(style_file, "r", encoding="utf-8") as f:
+            app.setStyleSheet(f.read())
+    else:
+        # Fallback to qdarkstyle
+        app.setStyleSheet(qdarkstyle.load_stylesheet(qt_api="pyside6"))
+
+
+def apply_light_theme(app: QtWidgets.QApplication) -> None:
+    """Apply a modern light theme"""
+    palette = QtGui.QPalette()
+
+    # Base colors
+    light_color = QtGui.QColor(245, 245, 245)     # Background
+    lighter_color = QtGui.QColor(252, 252, 252)   # Alternate background
+    text_color = QtGui.QColor(50, 50, 50)         # Text
+    highlight_color = QtGui.QColor(57, 142, 231)  # Blue highlight
+    button_color = QtGui.QColor(230, 230, 230)    # Button
+
+    # Set up the palette
+    palette.setColor(QtGui.QPalette.Window, light_color)
+    palette.setColor(QtGui.QPalette.WindowText, text_color)
+    palette.setColor(QtGui.QPalette.Base, lighter_color)
+    palette.setColor(QtGui.QPalette.AlternateBase, light_color)
+    palette.setColor(QtGui.QPalette.ToolTipBase, lighter_color)
+    palette.setColor(QtGui.QPalette.ToolTipText, text_color)
+    palette.setColor(QtGui.QPalette.Text, text_color)
+    palette.setColor(QtGui.QPalette.Button, button_color)
+    palette.setColor(QtGui.QPalette.ButtonText, text_color)
+    palette.setColor(QtGui.QPalette.BrightText, QtCore.Qt.red)
+    palette.setColor(QtGui.QPalette.Link, highlight_color)
+    palette.setColor(QtGui.QPalette.Highlight, highlight_color)
+    palette.setColor(QtGui.QPalette.HighlightedText, lighter_color)
+
+    app.setPalette(palette)
+
+
+def enable_animations() -> None:
+    """Enable Qt animations for smoother UI"""
+    QtCore.QCoreApplication.setAttribute(QtCore.Qt.AA_UseHighDpiPixmaps, True)
+    QtCore.QCoreApplication.setAttribute(QtCore.Qt.AA_EnableHighDpiScaling, True)
+
+
+def enable_hidpi_support() -> None:
+    """Enable HiDPI support for better display on high resolution screens"""
+    if hasattr(QtCore.Qt, 'AA_EnableHighDpiScaling'):
+        QtWidgets.QApplication.setAttribute(QtCore.Qt.AA_EnableHighDpiScaling, True)
+    if hasattr(QtCore.Qt, 'AA_UseHighDpiPixmaps'):
+        QtWidgets.QApplication.setAttribute(QtCore.Qt.AA_UseHighDpiPixmaps, True)
+
+
 class ExceptionWidget(QtWidgets.QWidget):
     """"""
     signal: QtCore.Signal = QtCore.Signal(str)
@@ -91,12 +200,15 @@ class ExceptionWidget(QtWidgets.QWidget):
         self.msg_edit.setReadOnly(True)
 
         copy_button: QtWidgets.QPushButton = QtWidgets.QPushButton(_("复制"))
+        copy_button.setIcon(QtGui.QIcon(get_icon_path(__file__, "copy.ico")))
         copy_button.clicked.connect(self._copy_text)
 
         community_button: QtWidgets.QPushButton = QtWidgets.QPushButton(_("求助"))
+        community_button.setIcon(QtGui.QIcon(get_icon_path(__file__, "help.ico")))
         community_button.clicked.connect(self._open_community)
 
         close_button: QtWidgets.QPushButton = QtWidgets.QPushButton(_("关闭"))
+        close_button.setIcon(QtGui.QIcon(get_icon_path(__file__, "close.ico")))
         close_button.clicked.connect(self.close)
 
         hbox: QtWidgets.QHBoxLayout = QtWidgets.QHBoxLayout()
